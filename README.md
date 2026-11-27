@@ -217,8 +217,8 @@ Follow these steps to run the complete PDS project on your local machine:
 ---
 
 ## 🤝 final Year Project Team Credits
-* **Developer/Author:** Aditya00010
-* **University/College:** Final Year B.Tech Project
+* **Developer/Author:** Aditya Yadav
+* **University/College:** Nitte Meenakshi Institute of Technology
 * **Contribution:** Core System Architecture, Solidity Contracts, Node.js API, React Frontend implementation.
 
 ---
