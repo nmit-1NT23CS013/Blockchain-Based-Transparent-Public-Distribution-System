@@ -54,6 +54,7 @@ This system uses a **Hybrid Architecture** designed for speed, scalability, and 
 * **🛡️ Preventative Smart Contracts:** The `BeneficiaryManagement` contract enforces a strict state machine preventing double claims.
 * **📊 Public Transparency Ledger:** An unauthenticated page that pulls transaction logs directly from the blockchain node, allowing anyone to verify system honesty.
 * **💼 Local Wallet Management:** Secure storage of wallet details linked to backend roles for seamless smart contract interaction.
+* **🔄 Fast Demo Reset & Validation:** A public "Reset Demo Data" button on the home page and login card that wipes transient MongoDB data, checks contract deployment bytecode integrity on-chain, and seeds a default Admin and initial Warehouse Stock, enabling quick repeated local demonstrations.
 
 ---
 
@@ -147,6 +148,9 @@ Follow these steps to run the complete PDS project on your local machine:
 
    # Admin's private key (Use first key from local Ganache/Hardhat node)
    ADMIN_PRIVATE_KEY=0x...
+
+   # Initial Central Warehouse Stock (in kg)
+   INITIAL_WAREHOUSE_STOCK=100000
    ```
 3. Seed the database with mock roles and users:
    ```bash
