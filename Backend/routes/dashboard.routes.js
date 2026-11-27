@@ -1,6 +1,12 @@
 const express = require("express");
 const router = express.Router();
 const blockchainService = require("../services/blockchainService");
+const { verifyReceipt } = require("../controllers/dashboardController");
+
+// @route GET /api/dashboard/verify-receipt/:receiptId
+// @desc Public route to verify ration distribution receipt against blockchain ledger
+// @access Public (No JWT required)
+router.get("/verify-receipt/:receiptId", verifyReceipt);
 
 // @route GET /api/dashboard/transactions
 // @desc Public route to fetch all blockchain events (grain transfers & ration collections) for transparency dashboard

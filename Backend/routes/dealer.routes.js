@@ -6,6 +6,7 @@ const {
   getStock,
   distributeRation,
   generateReceipt,
+  downloadReceiptPdf,
   searchBeneficiary,
   getDealerDistributions
 } = require("../controllers/dealerController");
@@ -28,5 +29,9 @@ router.post("/distribute", distributeRation);
 
 // @route POST /api/dealer/receipt
 router.post("/receipt", generateReceipt);
+
+// @route GET /api/dealer/receipt/:receiptId/pdf
+// @desc Download official PDF receipt for a distribution
+router.get("/receipt/:receiptId/pdf", downloadReceiptPdf);
 
 module.exports = router;

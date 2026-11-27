@@ -1,8 +1,10 @@
 const User = require("../models/User.model");
 const Dealer = require("../models/Dealer.model");
 const Beneficiary = require("../models/Beneficiary.model");
+const Receipt = require("../models/Receipt.model");
 const walletUtil = require("../utils/wallet");
 const blockchainService = require("../services/blockchainService");
+const { generateReceiptPdf } = require("../services/pdfService");
 
 /**
  * Fetch Dealer stock profile (allocated and current stock quantities).
@@ -87,6 +89,28 @@ const distributeRation = async (req, res) => {
       throw new Error("Admin private key is missing in .env configurations");
     }
 
+    // Verify / auto-heal beneficiary on-chain registration (e.g. if Ganache was redeployed)
+    try {
+      const status = await blockchainService.getBeneficiaryStatus(beneficiary.walletAddress);
+      if (!status || !status.isRegistered) {
+        console.log(`[AUTO-SYNC] Registering beneficiary wallet ${beneficiary.walletAddress} on-chain...`);
+        await blockchainService.registerBeneficiary(
+          beneficiary.walletAddress,
+          beneficiary.monthlyEntitlement || 35,
+          adminPrivateKey
+        );
+      }
+    } catch (bcSyncErr) {
+      if (bcSyncErr.message && bcSyncErr.message.includes("Beneficiary not registered")) {
+        console.log(`[AUTO-HEAL] Registering beneficiary wallet ${beneficiary.walletAddress} on-chain...`);
+        await blockchainService.registerBeneficiary(
+          beneficiary.walletAddress,
+          beneficiary.monthlyEntitlement || 35,
+          adminPrivateKey
+        );
+      }
+    }
+
     // Call blockchain function collectRation
     console.log(`[ON-CHAIN] Invoking collectRation for beneficiary wallet: ${beneficiary.walletAddress}`);
     const tx = await blockchainService.collectRation(
@@ -121,17 +145,37 @@ const distributeRation = async (req, res) => {
 };
 
 /**
- * Generate cryptographic receipt on-chain.
+ * Generate cryptographic receipt on-chain and persist off-chain metadata in MongoDB.
  * @route POST /api/dealer/receipt
  */
 const generateReceipt = async (req, res) => {
-  const { beneficiaryId, quantity, transactionReference } = req.body;
+  const { beneficiaryId, quantity, transactionReference, rationCardNumber } = req.body;
 
   try {
     if (!beneficiaryId || !quantity || !transactionReference) {
       return res.status(400).json({
         success: false,
         message: "Please provide beneficiaryId, quantity, and transactionReference"
+      });
+    }
+
+    // Idempotency check: Check if receipt document already exists for this distribution transaction
+    let existingReceipt = await Receipt.findOne({ transactionHash: transactionReference.trim() });
+    if (existingReceipt) {
+      return res.status(200).json({
+        success: true,
+        message: "Digital receipt already generated for this transaction",
+        data: {
+          receiptId: existingReceipt.receiptId,
+          blockchainReceiptId: existingReceipt.blockchainReceiptId,
+          beneficiaryName: existingReceipt.beneficiaryName,
+          rationCardNumber: existingReceipt.rationCardNumber,
+          quantity: existingReceipt.quantity,
+          transactionReference: existingReceipt.transactionHash,
+          transactionHash: existingReceipt.transactionHash,
+          verificationUrl: existingReceipt.verificationUrl,
+          timestamp: existingReceipt.distributionDate
+        }
       });
     }
 
@@ -149,16 +193,86 @@ const generateReceipt = async (req, res) => {
       adminPrivateKey
     );
 
+    if (!result || !result.receiptId) {
+      console.error("[DEALER RECEIPT] Failed to obtain on-chain receiptId from ReceiptManager.sol");
+      return res.status(500).json({
+        success: false,
+        message: "Failed to mint digital receipt on the blockchain smart contract. Please check your Ethereum node connection."
+      });
+    }
+
+    // Look up Dealer record
+    const dealer = await Dealer.findOne({ userId: req.user._id }).populate("userId");
+
+    // Look up Beneficiary record
+    let beneficiary = null;
+    if (rationCardNumber) {
+      beneficiary = await Beneficiary.findOne({ rationCardNumber: rationCardNumber.trim() });
+    }
+    if (!beneficiary) {
+      beneficiary = await Beneficiary.findOne({
+        $or: [
+          { userId: beneficiaryId },
+          { _id: (typeof beneficiaryId === "string" && beneficiaryId.length === 24) ? beneficiaryId : null }
+        ]
+      });
+    }
+
+    // Format human-readable unique Receipt ID: e.g. PDS-RCP-2026-00001
+    const year = new Date().getFullYear();
+    const formattedReceiptId = `PDS-RCP-${year}-${String(result.receiptId).padStart(5, "0")}`;
+
+    const months = [
+      "January", "February", "March", "April", "May", "June",
+      "July", "August", "September", "October", "November", "December"
+    ];
+    const distributionDate = result.timestamp || new Date();
+    const distributionMonth = `${months[distributionDate.getMonth()]} ${distributionDate.getFullYear()}`;
+
+    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";
+    const verificationUrl = `${frontendUrl}/verify/${formattedReceiptId}`;
+
+    // Persist off-chain receipt metadata in MongoDB
+    const receiptDoc = new Receipt({
+      receiptId: formattedReceiptId,
+      beneficiaryId: beneficiary ? beneficiary._id : null,
+      dealerId: dealer ? dealer._id : null,
+      beneficiaryName: beneficiary ? beneficiary.name : "Registered Beneficiary",
+      rationCardNumber: beneficiary ? beneficiary.rationCardNumber : (rationCardNumber || `RC-${beneficiaryId}`),
+      mobileNumber: beneficiary?.mobileNumber || "N/A",
+      beneficiaryWalletAddress: beneficiary?.walletAddress || "N/A",
+      dealerName: dealer?.userId?.name || "Licensed FPS Dealer",
+      fpsShopId: dealer?.fpsShopId || "FPS-DEALER",
+      dealerLocation: dealer?.location || "Distribution Center",
+      dealerWalletAddress: dealer?.userId?.walletAddress || "N/A",
+      distributionDate,
+      distributionMonth,
+      commodity: "Food Grains (Wheat / Rice)",
+      quantity: Number(quantity),
+      blockchainReceiptId: String(result.receiptId),
+      blockchainBeneficiaryId: String(Number(beneficiaryId) || 1),
+      transactionHash: transactionReference.trim(),
+      blockNumber: result.blockNumber || null,
+      contractAddress: process.env.RECEIPT_MANAGER_ADDRESS,
+      receiptStatus: "Confirmed on Blockchain",
+      verificationUrl
+    });
+
+    await receiptDoc.save();
+
     return res.status(200).json({
       success: true,
-      message: "Blockchain digital receipt generated",
+      message: "Blockchain digital receipt generated and recorded in ledger",
       data: {
-        receiptId: result.receiptId,
-        beneficiaryId: Number(beneficiaryId),
-        quantity: Number(quantity),
-        transactionReference,
+        receiptId: receiptDoc.receiptId,
+        blockchainReceiptId: receiptDoc.blockchainReceiptId,
+        beneficiaryName: receiptDoc.beneficiaryName,
+        rationCardNumber: receiptDoc.rationCardNumber,
+        quantity: receiptDoc.quantity,
+        transactionReference: receiptDoc.transactionHash,
         transactionHash: result.transactionHash,
-        timestamp: result.timestamp
+        verificationUrl: receiptDoc.verificationUrl,
+        timestamp: receiptDoc.distributionDate
       }
     });
 
@@ -167,6 +281,61 @@ const generateReceipt = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Server error generating collection receipt",
+      error: error.message
+    });
+  }
+};
+
+/**
+ * Downloads official PDF receipt for a verified distribution.
+ * Authorized for the distributing Dealer or Admin.
+ * @route GET /api/dealer/receipt/:receiptId/pdf
+ */
+const downloadReceiptPdf = async (req, res) => {
+  const { receiptId } = req.params;
+
+  try {
+    if (!receiptId) {
+      return res.status(400).json({
+        success: false,
+        message: "Please provide a valid receiptId"
+      });
+    }
+
+    const receipt = await Receipt.findOne({ receiptId: receiptId.trim() });
+    if (!receipt) {
+      return res.status(404).json({
+        success: false,
+        message: `Distribution receipt '${receiptId}' not found`
+      });
+    }
+
+    // Role-based access authorization:
+    // If user is a Dealer, verify the receipt belongs to their shop
+    if (req.user.role === "Dealer") {
+      const dealer = await Dealer.findOne({ userId: req.user._id });
+      if (!dealer || (receipt.dealerId && !receipt.dealerId.equals(dealer._id))) {
+        return res.status(403).json({
+          success: false,
+          message: "Forbidden: You are not authorized to download receipts from another dealer"
+        });
+      }
+    }
+
+    // Generate high-fidelity PDF binary stream with embedded QR code
+    const pdfBuffer = await generateReceiptPdf(receipt);
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${receipt.receiptId}.pdf"`);
+    res.setHeader("Content-Length", pdfBuffer.length);
+
+    return res.end(pdfBuffer);
+
+  } catch (error) {
+    console.error(`[DEALER RECEIPT PDF ERROR]: ${error.message}`);
+    return res.status(500).json({
+      success: false,
+      message: "Server error generating receipt PDF",
       error: error.message
     });
   }
@@ -288,6 +457,7 @@ module.exports = {
   getStock,
   distributeRation,
   generateReceipt,
+  downloadReceiptPdf,
   searchBeneficiary,
   getDealerDistributions
 };

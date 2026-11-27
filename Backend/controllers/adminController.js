@@ -1,6 +1,8 @@
+const crypto = require("crypto");
 const User = require("../models/User.model");
 const Dealer = require("../models/Dealer.model");
 const Beneficiary = require("../models/Beneficiary.model");
+const OtpSession = require("../models/OtpSession.model");
 const walletUtil = require("../utils/wallet");
 const blockchainService = require("../services/blockchainService");
 
@@ -90,18 +92,123 @@ const registerDealer = async (req, res) => {
  * Creates User and Beneficiary documents, generates an Ethereum wallet, and registers on-chain.
  * @route POST /api/admin/register-beneficiary
  */
+/**
+ * Register a new Beneficiary.
+ * Enforces backend OTP verification token validation, creates User and Beneficiary documents,
+ * generates an Ethereum wallet, and registers on-chain.
+ * @route POST /api/admin/register-beneficiary
+ */
 const registerBeneficiary = async (req, res) => {
-  const { name, rationCardNumber, password, monthlyEntitlement, registeredDealerId } = req.body;
+  const {
+    name,
+    rationCardNumber,
+    mobileNumber,
+    password,
+    monthlyEntitlement,
+    registeredDealerId,
+    verificationToken
+  } = req.body;
+
+  let createdUser = null;
+  let createdBeneficiary = null;
 
   try {
-    if (!name || !rationCardNumber || !password || !monthlyEntitlement || !registeredDealerId) {
+    // 1. Mandatory input validation
+    if (!name || !rationCardNumber || !mobileNumber || !password || !monthlyEntitlement || !registeredDealerId) {
       return res.status(400).json({
         success: false,
-        message: "Please provide name, rationCardNumber, password, monthlyEntitlement, and registeredDealerId"
+        message: "Please provide name, rationCardNumber, mobileNumber, password, monthlyEntitlement, and registeredDealerId"
       });
     }
 
-    // Ensure dealer shop exists
+    const trimmedCard = rationCardNumber.toString().trim();
+    const trimmedMobile = mobileNumber.toString().trim();
+
+    // 2. Mobile number Indian format validation
+    if (!/^[6-9]\d{9}$/.test(trimmedMobile)) {
+      return res.status(400).json({
+        success: false,
+        message: "Please provide a valid 10-digit Indian mobile number"
+      });
+    }
+
+    // 3. Security Check: Verification Token must be provided
+    if (!verificationToken) {
+      return res.status(400).json({
+        success: false,
+        message: "Beneficiary registration rejected: Missing OTP verification token. You must verify OTP first."
+      });
+    }
+
+    // 4. Compute SHA-256 hash of submitted verification token
+    const tokenHash = crypto.createHash("sha256").update(verificationToken.toString().trim()).digest("hex");
+
+    // 5. Concurrency-safe atomic token verification & consumption
+    // Finds verified, unused, unexpired session matching token hash, card, and mobile,
+    // and atomically marks isUsed: true in a single atomic database operation.
+    const consumedSession = await OtpSession.findOneAndUpdate(
+      {
+        verificationTokenHash: tokenHash,
+        isVerified: true,
+        isUsed: false,
+        tokenExpiresAt: { $gt: new Date() },
+        rationCardNumber: trimmedCard,
+        mobileNumber: trimmedMobile
+      },
+      {
+        $set: {
+          isUsed: true,
+          usedAt: new Date()
+        }
+      }
+    );
+
+    // If atomic consumption failed, determine the exact security reason
+    if (!consumedSession) {
+      const existingSession = await OtpSession.findOne({ verificationTokenHash: tokenHash });
+      if (!existingSession) {
+        return res.status(400).json({
+          success: false,
+          message: "Registration rejected: Invalid or forged verification token."
+        });
+      }
+      if (!existingSession.isVerified) {
+        return res.status(400).json({
+          success: false,
+          message: "Registration rejected: OTP session has not been verified."
+        });
+      }
+      if (existingSession.isUsed) {
+        return res.status(400).json({
+          success: false,
+          message: "Registration rejected: Verification token has already been used. Please generate a new OTP."
+        });
+      }
+      if (existingSession.tokenExpiresAt && new Date() > new Date(existingSession.tokenExpiresAt)) {
+        return res.status(400).json({
+          success: false,
+          message: "Registration rejected: Verification token has expired. Please generate a new OTP."
+        });
+      }
+      if (existingSession.rationCardNumber !== trimmedCard) {
+        return res.status(400).json({
+          success: false,
+          message: "Registration rejected: Verification token was issued for a different Ration Card Number."
+        });
+      }
+      if (existingSession.mobileNumber !== trimmedMobile) {
+        return res.status(400).json({
+          success: false,
+          message: "Registration rejected: Verification token was issued for a different mobile number."
+        });
+      }
+      return res.status(400).json({
+        success: false,
+        message: "Registration rejected: OTP verification validation failed."
+      });
+    }
+
+    // 6. Ensure dealer shop exists
     const dealer = await Dealer.findById(registeredDealerId);
     if (!dealer) {
       return res.status(404).json({
@@ -110,8 +217,8 @@ const registerBeneficiary = async (req, res) => {
       });
     }
 
-    // Ensure ration card number is unique
-    const cardExists = await Beneficiary.findOne({ rationCardNumber: rationCardNumber.trim() });
+    // 7. Ensure ration card number is unique
+    const cardExists = await Beneficiary.findOne({ rationCardNumber: trimmedCard });
     if (cardExists) {
       return res.status(400).json({
         success: false,
@@ -119,33 +226,36 @@ const registerBeneficiary = async (req, res) => {
       });
     }
 
-    // Programmatically generate Ethereum wallet
+    // 8. Programmatically generate Ethereum wallet
     const { address, privateKey } = walletUtil.createWallet();
     const encryptedPrivateKey = walletUtil.encryptPrivateKey(privateKey);
 
-    // Save User credentials
+    // 9. Save User credentials
     const user = new User({
-      name,
+      name: name.trim(),
       password,
       role: "Beneficiary",
       walletAddress: address,
       encryptedPrivateKey
     });
     await user.save();
+    createdUser = user;
 
-    // Save Beneficiary details
+    // 10. Save Beneficiary details with verified mobile number
     const beneficiary = new Beneficiary({
       userId: user._id,
-      name,
-      rationCardNumber: rationCardNumber.trim(),
+      name: name.trim(),
+      rationCardNumber: trimmedCard,
+      mobileNumber: trimmedMobile,
       walletAddress: address,
       monthlyEntitlement: Number(monthlyEntitlement),
       registeredDealer: dealer._id,
       isRegisteredOnChain: false
     });
     await beneficiary.save();
+    createdBeneficiary = beneficiary;
 
-    // Register beneficiary on-chain (using Admin's signature)
+    // 11. Register beneficiary on-chain (using Admin's signature)
     const adminPrivateKey = process.env.ADMIN_PRIVATE_KEY;
     if (!adminPrivateKey) {
       throw new Error("Admin private key is missing in .env config");
@@ -164,7 +274,9 @@ const registerBeneficiary = async (req, res) => {
         message: "Beneficiary profile created in DB, but blockchain sync is pending",
         data: {
           beneficiaryId: beneficiary._id,
+          name: beneficiary.name,
           rationCardNumber: beneficiary.rationCardNumber,
+          mobileNumber: beneficiary.mobileNumber,
           walletAddress: address,
           isRegisteredOnChain: false
         }
@@ -178,6 +290,7 @@ const registerBeneficiary = async (req, res) => {
         beneficiaryId: beneficiary._id,
         name: beneficiary.name,
         rationCardNumber: beneficiary.rationCardNumber,
+        mobileNumber: beneficiary.mobileNumber,
         walletAddress: beneficiary.walletAddress,
         monthlyEntitlement: beneficiary.monthlyEntitlement,
         isRegisteredOnChain: true
@@ -186,6 +299,15 @@ const registerBeneficiary = async (req, res) => {
 
   } catch (error) {
     console.error(`[ADMIN REG BENEFICIARY ERROR]: ${error.message}`);
+    // Rollback: If user account was created but beneficiary document failed to save, remove orphaned user
+    if (createdUser && createdUser._id && (!createdBeneficiary || !createdBeneficiary._id)) {
+      try {
+        await User.findByIdAndDelete(createdUser._id);
+        console.log(`[ROLLBACK] Cleaned up orphaned User account ${createdUser._id}`);
+      } catch (cleanupErr) {
+        console.error(`[ROLLBACK ERROR]: ${cleanupErr.message}`);
+      }
+    }
     return res.status(500).json({
       success: false,
       message: "Server error registering beneficiary profile",
@@ -220,11 +342,15 @@ const allocateEntitlement = async (req, res) => {
 
     // Call blockchain update
     const adminPrivateKey = process.env.ADMIN_PRIVATE_KEY;
-    await blockchainService.updateEntitlement(beneficiary.walletAddress, newEntitlement, adminPrivateKey);
+    try {
+      await blockchainService.updateEntitlement(beneficiary.walletAddress, newEntitlement, adminPrivateKey);
+      beneficiary.isRegisteredOnChain = true;
+    } catch (bcErr) {
+      console.warn(`[BLOCKCHAIN TX WARNING]: Failed to sync entitlement on-chain: ${bcErr.message}`);
+    }
 
     // Sync database
     beneficiary.monthlyEntitlement = Number(newEntitlement);
-    beneficiary.isRegisteredOnChain = true;
     await beneficiary.save();
 
     return res.status(200).json({
@@ -441,6 +567,219 @@ const resetMonthlyCycle = async (req, res) => {
   }
 };
 
+/**
+ * Generate a 6-digit OTP for beneficiary registration verification.
+ * Displays OTP in backend terminal for demo, stores secure hash in MongoDB.
+ * @route POST /api/admin/generate-otp
+ */
+const generateOtp = async (req, res) => {
+  const { mobileNumber, rationCardNumber } = req.body;
+
+  try {
+    if (!mobileNumber || !rationCardNumber) {
+      return res.status(400).json({
+        success: false,
+        message: "Please provide both mobileNumber and rationCardNumber"
+      });
+    }
+
+    const trimmedCard = rationCardNumber.toString().trim();
+    const trimmedMobile = mobileNumber.toString().trim();
+
+    // Validate 10-digit mobile number format
+    if (!/^\d{10}$/.test(trimmedMobile)) {
+      return res.status(400).json({
+        success: false,
+        message: "Please provide a valid 10-digit mobile number"
+      });
+    }
+
+    // Check if ration card number is already registered in DB
+    const cardExists = await Beneficiary.findOne({ rationCardNumber: trimmedCard });
+    if (cardExists) {
+      return res.status(400).json({
+        success: false,
+        message: "Ration Card Number is already in use by another beneficiary"
+      });
+    }
+
+    // Generate cryptographically secure random 6-digit OTP (100000 - 999999)
+    const otp = crypto.randomInt(100000, 1000000).toString();
+
+    // Generate random salt and compute secure SHA-256 hash of OTP
+    const salt = crypto.randomBytes(16).toString("hex");
+    const otpHash = crypto.createHash("sha256").update(otp + salt).digest("hex");
+
+    // Expiration time set to 5 minutes from now
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+
+    // Invalidate any existing pending sessions for this card or mobile
+    await OtpSession.deleteMany({
+      $or: [{ rationCardNumber: trimmedCard }, { mobileNumber: trimmedMobile }],
+      isVerified: false
+    });
+
+    // Create new OTP verification session
+    const session = new OtpSession({
+      mobileNumber: trimmedMobile,
+      rationCardNumber: trimmedCard,
+      otpHash,
+      salt,
+      attempts: 0,
+      maxAttempts: 3,
+      isVerified: false,
+      expiresAt
+    });
+
+    await session.save();
+
+    // Prominently print OTP to backend terminal for demonstration purposes
+    console.log("\n======================================================================");
+    console.log("   [PDS TRUSTLINK] BENEFICIARY REGISTRATION OTP - DEMO MODE");
+    console.log("======================================================================");
+    console.log(`   Ration Card Number : ${trimmedCard}`);
+    console.log(`   Mobile Number      : ${trimmedMobile}`);
+    console.log(`   One-Time Password  : >>>  ${otp}  <<<`);
+    console.log(`   Validity           : 5 Minutes (Expires at: ${expiresAt.toLocaleTimeString()})`);
+    console.log(`   Max Attempts       : 3`);
+    console.log("======================================================================\n");
+
+    return res.status(200).json({
+      success: true,
+      message: "Verification OTP generated successfully and displayed in server terminal",
+      data: {
+        otpSessionId: session._id,
+        expiresAt: session.expiresAt
+      }
+    });
+
+  } catch (error) {
+    console.error(`[ADMIN GENERATE OTP ERROR]: ${error.message}`);
+    return res.status(500).json({
+      success: false,
+      message: "Server error generating registration OTP",
+      error: error.message
+    });
+  }
+};
+
+/**
+ * Verify 6-digit OTP entered by Admin.
+ * Checks expiry, attempt limit, and constant-time hash equality.
+ * Issues single-use verificationToken on success.
+ * @route POST /api/admin/verify-otp
+ */
+const verifyOtp = async (req, res) => {
+  const { otpSessionId, otp } = req.body;
+
+  try {
+    if (!otpSessionId || !otp) {
+      return res.status(400).json({
+        success: false,
+        message: "Please provide otpSessionId and otp"
+      });
+    }
+
+    const trimmedOtp = otp.toString().trim();
+    if (trimmedOtp.length !== 6) {
+      return res.status(400).json({
+        success: false,
+        message: "OTP must be exactly 6 digits"
+      });
+    }
+
+    const session = await OtpSession.findById(otpSessionId);
+    if (!session) {
+      return res.status(404).json({
+        success: false,
+        message: "OTP verification session not found or has expired. Please generate a new OTP."
+      });
+    }
+
+    // Check if session was already verified
+    if (session.isVerified) {
+      return res.status(400).json({
+        success: false,
+        message: "This OTP session has already been verified and cannot be reused"
+      });
+    }
+
+    // Check if expired
+    if (Date.now() > new Date(session.expiresAt).getTime()) {
+      return res.status(400).json({
+        success: false,
+        message: "OTP has expired. Please generate a new OTP."
+      });
+    }
+
+    // Check attempt limits
+    if (session.attempts >= session.maxAttempts) {
+      return res.status(400).json({
+        success: false,
+        message: "Maximum verification attempts exceeded. Please generate a new OTP."
+      });
+    }
+
+    // Hash entered OTP with session salt
+    const candidateHash = crypto.createHash("sha256").update(trimmedOtp + session.salt).digest("hex");
+
+    // Constant-time buffer comparison to prevent timing side-channel attacks
+    const candidateBuffer = Buffer.from(candidateHash, "hex");
+    const storedBuffer = Buffer.from(session.otpHash, "hex");
+    const isMatch = candidateBuffer.length === storedBuffer.length && crypto.timingSafeEqual(candidateBuffer, storedBuffer);
+
+    if (!isMatch) {
+      session.attempts += 1;
+      await session.save();
+
+      const attemptsRemaining = session.maxAttempts - session.attempts;
+      if (attemptsRemaining <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid OTP. Maximum attempts exceeded. This session has been locked. Please generate a new OTP.",
+          data: { attemptsRemaining: 0 }
+        });
+      }
+
+      return res.status(400).json({
+        success: false,
+        message: `Invalid OTP. ${attemptsRemaining} attempt(s) remaining.`,
+        data: { attemptsRemaining }
+      });
+    }
+
+    // Successful verification: Issue cryptographic single-use verification token
+    const verificationToken = crypto.randomBytes(32).toString("hex");
+    const verificationTokenHash = crypto.createHash("sha256").update(verificationToken).digest("hex");
+
+    session.isVerified = true;
+    session.verificationTokenHash = verificationTokenHash;
+    session.tokenExpiresAt = new Date(Date.now() + 5 * 60 * 1000); // Token valid for 5 minutes
+    session.isUsed = false;
+    await session.save();
+
+    console.log(`[PDS TRUSTLINK] OTP successfully verified for Ration Card: ${session.rationCardNumber}`);
+
+    return res.status(200).json({
+      success: true,
+      message: "OTP verified successfully. Beneficiary registration is authorized.",
+      data: {
+        verificationToken,
+        rationCardNumber: session.rationCardNumber,
+        mobileNumber: session.mobileNumber
+      }
+    });
+
+  } catch (error) {
+    console.error(`[ADMIN VERIFY OTP ERROR]: ${error.message}`);
+    return res.status(500).json({
+      success: false,
+      message: "Server error verifying OTP",
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   registerDealer,
   registerBeneficiary,
@@ -449,5 +788,7 @@ module.exports = {
   getDealers,
   getBeneficiaries,
   getStats,
-  resetMonthlyCycle
+  resetMonthlyCycle,
+  generateOtp,
+  verifyOtp
 };

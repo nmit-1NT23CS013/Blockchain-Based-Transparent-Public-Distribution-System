@@ -1,3 +1,6 @@
+const path = require("path");
+const dotenv = require("dotenv");
+dotenv.config({ path: path.join(__dirname, "../.env") });
 const { ethers } = require("ethers");
 
 // Load contract ABIs from Hardhat artifacts folder
@@ -87,7 +90,9 @@ const collectRation = async (beneficiaryAddress, quantity, dealerPrivateKey) => 
     signer
   );
 
-  const tx = await contract.collectRation(beneficiaryAddress, quantity);
+  const provider = getProvider();
+  const nonce = await provider.getTransactionCount(signer.address, "latest");
+  const tx = await contract.collectRation(beneficiaryAddress, quantity, { nonce });
   const receipt = await tx.wait();
   return {
     transactionHash: tx.hash,
@@ -106,7 +111,9 @@ const generateReceipt = async (beneficiaryId, quantity, transactionReference, de
     signer
   );
 
-  const tx = await contract.generateReceipt(beneficiaryId, quantity, transactionReference);
+  const provider = getProvider();
+  const nonce = await provider.getTransactionCount(signer.address, "latest");
+  const tx = await contract.generateReceipt(beneficiaryId, quantity, transactionReference, { nonce });
   const receipt = await tx.wait();
 
   // Find ReceiptGenerated event and parse it to fetch receiptId
@@ -126,8 +133,22 @@ const generateReceipt = async (beneficiaryId, quantity, transactionReference, de
     }
   }
 
+  // Fallback: If not parsed from receipt logs, query by event filter
+  if (!receiptId) {
+    try {
+      const filter = contract.filters.ReceiptGenerated(null, beneficiaryId);
+      const events = await contract.queryFilter(filter, receipt.blockNumber, receipt.blockNumber);
+      if (events && events.length > 0) {
+        receiptId = events[events.length - 1].args.receiptId.toString();
+      }
+    } catch (filterErr) {
+      console.warn(`[EVENT FILTER FALLBACK WARNING]: ${filterErr.message}`);
+    }
+  }
+
   return {
     transactionHash: tx.hash,
+    blockNumber: receipt.blockNumber,
     receiptId: receiptId,
     timestamp: new Date()
   };
@@ -240,12 +261,40 @@ const resetMonthlyCollection = async (adminPrivateKey) => {
   };
 };
 
+/**
+ * Reads a receipt record directly from ReceiptManager.sol smart contract.
+ */
+const getBlockchainReceipt = async (receiptId) => {
+  const provider = getProvider();
+  const contract = new ethers.Contract(
+    process.env.RECEIPT_MANAGER_ADDRESS,
+    receiptManagerJson.abi,
+    provider
+  );
+
+  const r = await contract.getReceipt(receiptId);
+  const id = r.id !== undefined ? r.id : r[0];
+  const beneficiaryId = r.beneficiaryId !== undefined ? r.beneficiaryId : r[1];
+  const quantity = r.quantity !== undefined ? r.quantity : r[2];
+  const transactionReference = r.transactionReference !== undefined ? r.transactionReference : r[3];
+  const timestamp = r.timestamp !== undefined ? r.timestamp : r[4];
+
+  return {
+    receiptId: id.toString(),
+    beneficiaryId: beneficiaryId.toString(),
+    quantity: quantity.toString(),
+    transactionReference: transactionReference,
+    timestamp: new Date(Number(timestamp) * 1000)
+  };
+};
+
 module.exports = {
   transferGrain,
   registerBeneficiary,
   updateEntitlement,
   collectRation,
   generateReceipt,
+  getBlockchainReceipt,
   getAllGrainTransfers,
   getAllDistributions,
   getBeneficiaryStatus,

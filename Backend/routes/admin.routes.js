@@ -10,7 +10,9 @@ const {
   getDealers,
   getBeneficiaries,
   getStats,
-  resetMonthlyCycle
+  resetMonthlyCycle,
+  generateOtp,
+  verifyOtp
 } = require("../controllers/adminController");
 
 // Apply protection and Admin-role enforcement to all Admin routes
@@ -40,5 +42,13 @@ router.post("/transfer", transferGrain);
 
 // @route POST /api/admin/reset-cycle
 router.post("/reset-cycle", resetMonthlyCycle);
+
+// @route POST /api/admin/generate-otp
+// @desc Generate 6-digit OTP for beneficiary registration verification
+router.post("/generate-otp", generateOtp);
+
+// @route POST /api/admin/verify-otp
+// @desc Verify 6-digit OTP and issue single-use registration verification token
+router.post("/verify-otp", verifyOtp);
 
 module.exports = router;

@@ -1,4 +1,3 @@
-import React from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import ProtectedRoute from "./components/ProtectedRoute";
 
@@ -6,6 +5,7 @@ import ProtectedRoute from "./components/ProtectedRoute";
 import Login from "./pages/Login";
 import TransparencyDashboard from "./pages/TransparencyDashboard";
 import LandingPage from "./pages/LandingPage";
+import VerifyReceipt from "./pages/VerifyReceipt";
 
 // Admin Dashboard Components
 import AdminLayout from "./pages/admin/AdminLayout";
@@ -35,6 +35,7 @@ function App() {
       <Route path="/" element={<LandingPage />} />
       <Route path="/login" element={<Login />} />
       <Route path="/transparency" element={<TransparencyDashboard />} />
+      <Route path="/verify/:receiptId" element={<VerifyReceipt />} />
 
       {/* Admin Protected Routes */}
       <Route
