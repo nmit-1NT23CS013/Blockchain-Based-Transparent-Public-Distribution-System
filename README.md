@@ -41,34 +41,7 @@ The traditional Public Distribution System often suffers from lack of transparen
 
 This system uses a **Hybrid Architecture** designed for speed, scalability, and cryptographic security:
 
-```mermaid
-flowchart TD
-    %% Frontend Layer
-    subgraph FE [Client Side - React & Vite]
-        UI[PDS TrustLink UI]
-        TP[Public Transparency Page]
-    end
-
-    %% API Layer
-    subgraph BE [Backend Server - Node.js & Express]
-        API[Express Router]
-        Auth[JWT Middleware]
-        BCS[Blockchain Service - Ethers.js]
-    end
-
-    %% Database & Ledger
-    subgraph DB [Data Storage Layers]
-        Mongo[(MongoDB Atlas - User profiles, Credentials, Session logs)]
-        Ganache[(Ganache Local Ledger - Hardhat Smart Contracts)]
-    end
-
-    %% Data Flow
-    UI -->|JWT Auth Requests| API
-    TP -->|Public Queries| API
-    API -->|Schema Queries| Mongo
-    API -->|Read/Write State| BCS
-    BCS -->|RPC Calls| Ganache
-```
+![PDS TrustLink Technical Architecture](screenshots/architecture.png)
 
 ---
 
