@@ -13,9 +13,43 @@ const Login = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [resetLoading, setResetLoading] = useState(false);
+  const [resetMessage, setResetMessage] = useState("");
+  const [resetError, setResetError] = useState("");
 
   const { login } = useAuth();
   const navigate = useNavigate();
+
+  const handleResetDemo = async () => {
+    const confirmReset = window.confirm(
+      "Are you sure you want to reset all demo data? " +
+      "This will clear all Dealers, Beneficiaries, and off-chain stock, and seed the default Admin."
+    );
+
+    if (!confirmReset) return;
+
+    setResetLoading(true);
+    setResetMessage("");
+    setResetError("");
+    setError("");
+
+    try {
+      const response = await API.post("/api/auth/reset-demo");
+      if (response.data.success) {
+        setResetMessage("Demo environment initialized successfully.");
+      } else {
+        setResetError(response.data.message || "Failed to initialize demo data.");
+      }
+    } catch (err) {
+      console.error("[DEMO RESET ERROR]", err);
+      setResetError(
+        err.response?.data?.message || 
+        "Failed to reset demo data. Please verify backend connection and smart contract deployment status."
+      );
+    } finally {
+      setResetLoading(false);
+    }
+  };
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -193,6 +227,46 @@ const Login = () => {
                 )}
               </button>
             </form>
+
+            {/* Reset Demo Data Section */}
+            <div className="mt-6 pt-6 border-t border-slate-200">
+              <div className="text-center mb-3">
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                  Demo Operations
+                </p>
+              </div>
+
+              {resetError && (
+                <div className="mb-3 p-2.5 bg-red-50 text-red-700 rounded border border-red-200 text-xs text-center font-medium">
+                  {resetError}
+                </div>
+              )}
+
+              {resetMessage && (
+                <div className="mb-3 p-2.5 bg-emerald-50 text-emerald-700 rounded border border-emerald-200 text-xs text-center font-semibold">
+                  {resetMessage}
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={handleResetDemo}
+                disabled={resetLoading}
+                className="w-full h-11 bg-amber-600 hover:bg-amber-700 text-white rounded font-semibold text-xs flex items-center justify-center gap-2 transition-all active:scale-[0.98] disabled:opacity-75 disabled:cursor-not-allowed shadow-sm uppercase tracking-wider"
+              >
+                {resetLoading ? (
+                  <>
+                    <svg className="animate-spin h-4 w-4 text-white" fill="none" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                    </svg>
+                    <span>Resetting Demo Data...</span>
+                  </>
+                ) : (
+                  <span>Reset Demo Data</span>
+                )}
+              </button>
+            </div>
 
             <div className="mt-6 pt-6 border-t border-slate-200 flex flex-col gap-2 items-center text-xs">
               <a className="text-navy font-semibold hover:underline" href="/transparency">

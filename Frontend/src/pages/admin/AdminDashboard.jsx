@@ -161,7 +161,13 @@ const AdminDashboard = () => {
       {successMsg && <SuccessMessage message={successMsg} txHash={successTxHash} />}
 
       {/* Stats aggregates grid row */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-6">
+        <StatCard
+          title="Central Warehouse Stock"
+          value={stats?.warehouseStock !== undefined ? `${stats.warehouseStock} kg` : "0 kg"}
+          color="amber"
+          icon={<span className="material-symbols-outlined text-[24px]">warehouse</span>}
+        />
         <StatCard
           title="Registered Dealers"
           value={stats?.totalDealers ?? 0}
@@ -177,7 +183,7 @@ const AdminDashboard = () => {
         <StatCard
           title="Blockchain Grain Transfers"
           value={stats?.totalTransfers ?? 0}
-          color="amber"
+          color="rose"
           icon={<span className="material-symbols-outlined text-[24px]">local_shipping</span>}
         />
         <StatCard

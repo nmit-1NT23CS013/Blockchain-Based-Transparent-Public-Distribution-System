@@ -12,27 +12,32 @@ const TransferGrain = () => {
   const [dealers, setDealers] = useState([]);
   const [selectedDealerId, setSelectedDealerId] = useState("");
   const [quantity, setQuantity] = useState("");
+  const [warehouseStock, setWarehouseStock] = useState(null);
   const [loadingDealers, setLoadingDealers] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState("");
   const [txHash, setTxHash] = useState("");
   const [error, setError] = useState("");
 
-  const fetchDealers = async () => {
+  const fetchDealersAndStock = async () => {
     try {
       setLoadingDealers(true);
-      const res = await API.get("/api/admin/dealers");
-      setDealers(res.data.data);
+      const [dealersRes, statsRes] = await Promise.all([
+        API.get("/api/admin/dealers"),
+        API.get("/api/admin/stats")
+      ]);
+      setDealers(dealersRes.data.data);
+      setWarehouseStock(statsRes.data.data.warehouseStock);
     } catch (err) {
-      console.error("Failed to load dealers dropdown", err);
-      setError("Unable to retrieve dealer lists. Dropdown cannot be populated.");
+      console.error("Failed to load dealers dropdown or stock stats", err);
+      setError("Unable to retrieve dealer lists or warehouse stock details.");
     } finally {
       setLoadingDealers(false);
     }
   };
 
   useEffect(() => {
-    fetchDealers();
+    fetchDealersAndStock();
   }, []);
 
   const handleSubmit = async (e) => {
@@ -50,11 +55,14 @@ const TransferGrain = () => {
         quantity: Number(quantity)
       });
       
-      const { quantityTransferred, fpsShopId, transactionHash } = res.data.data;
+      const { quantityTransferred, fpsShopId, transactionHash, warehouseStock: newStock } = res.data.data;
       const dealerName = dealers.find(d => d._id === selectedDealerId)?.userId?.name || "Dealer";
       
       setSuccess(`Successfully transferred ${quantityTransferred} kg of grain to Dealer '${dealerName}' (${fpsShopId}) on-chain.`);
       setTxHash(transactionHash);
+      if (newStock !== undefined) {
+        setWarehouseStock(newStock);
+      }
       setQuantity("");
       setSelectedDealerId("");
     } catch (err) {
@@ -72,11 +80,18 @@ const TransferGrain = () => {
 
   return (
     <div className="max-w-2xl mx-auto space-y-6">
-      <div>
-        <h2 className="text-xl font-bold text-navy">Transfer Grain to Dealer</h2>
-        <p className="text-sm text-slate-500">
-          Allocate central storage grain stock to a Fair Price Shop Dealer. Creates an immutable transaction on the blockchain ledger.
-        </p>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-bold text-navy">Transfer Grain to Dealer</h2>
+          <p className="text-sm text-slate-500">
+            Allocate central storage grain stock to a Fair Price Shop Dealer. Creates an immutable transaction on the blockchain ledger.
+          </p>
+        </div>
+        {warehouseStock !== null && (
+          <div className="shrink-0 text-sm font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded px-4 py-2 shadow-sm">
+            Warehouse Stock: <span className="font-bold text-base">{warehouseStock}</span> kg
+          </div>
+        )}
       </div>
 
       {success && <SuccessMessage message={success} txHash={txHash} />}

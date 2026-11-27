@@ -273,8 +273,28 @@ const transferGrain = async (req, res) => {
     const targetWallet = dealer.userId.walletAddress;
     const adminPrivateKey = process.env.ADMIN_PRIVATE_KEY;
 
+    // Check central warehouse stock
+    const Warehouse = require("../models/Warehouse.model");
+    let warehouse = await Warehouse.findOne();
+    if (!warehouse) {
+      const initialStock = Number(process.env.INITIAL_WAREHOUSE_STOCK) || 100000;
+      warehouse = new Warehouse({ stock: initialStock });
+      await warehouse.save();
+    }
+
+    if (warehouse.stock < Number(quantity)) {
+      return res.status(400).json({
+        success: false,
+        message: `Insufficient stock in Central Warehouse. Available: ${warehouse.stock} kg`
+      });
+    }
+
     // Call on-chain GrainTransfer
     const tx = await blockchainService.transferGrain(targetWallet, quantity, adminPrivateKey);
+
+    // Decrement central stock
+    warehouse.stock -= Number(quantity);
+    await warehouse.save();
 
     // Sync database inventories
     dealer.allocatedStock += Number(quantity);
@@ -290,7 +310,8 @@ const transferGrain = async (req, res) => {
         quantityTransferred: Number(quantity),
         allocatedStock: dealer.allocatedStock,
         currentStock: dealer.currentStock,
-        transactionHash: tx.transactionHash
+        transactionHash: tx.transactionHash,
+        warehouseStock: warehouse.stock
       }
     });
 
@@ -360,13 +381,23 @@ const getStats = async (req, res) => {
       console.warn("Blockchain distributions read failed", e.message);
     }
 
+    // Fetch warehouse stock
+    const Warehouse = require("../models/Warehouse.model");
+    let warehouse = await Warehouse.findOne();
+    if (!warehouse) {
+      const initialStock = Number(process.env.INITIAL_WAREHOUSE_STOCK) || 100000;
+      warehouse = new Warehouse({ stock: initialStock });
+      await warehouse.save();
+    }
+
     return res.status(200).json({
       success: true,
       data: {
         totalDealers: dealersCount,
         totalBeneficiaries: beneficiariesCount,
         totalTransfers: transfersCount,
-        totalDistributions: distributionsCount
+        totalDistributions: distributionsCount,
+        warehouseStock: warehouse.stock
       }
     });
   } catch (error) {

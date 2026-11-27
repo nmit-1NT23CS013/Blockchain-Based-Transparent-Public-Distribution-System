@@ -4,6 +4,7 @@ const path = require("path");
 const { Wallet } = require("ethers");
 
 const User = require("../models/User.model");
+const Warehouse = require("../models/Warehouse.model");
 const walletUtil = require("../utils/wallet");
 
 // Configure dotenv path relative to scripts folder
@@ -59,6 +60,13 @@ const seedAdmin = async () => {
     });
 
     await admin.save();
+
+    // Create the Warehouse stock record
+    const initialStock = Number(process.env.INITIAL_WAREHOUSE_STOCK) || 100000;
+    await Warehouse.deleteMany({});
+    const warehouse = new Warehouse({ stock: initialStock });
+    await warehouse.save();
+    console.log(`[SEED] Initialized Central Warehouse Stock to ${initialStock} kg.`);
 
     console.log("====================================================");
     console.log("ADMIN USER SEEDED SUCCESSFULLY!");

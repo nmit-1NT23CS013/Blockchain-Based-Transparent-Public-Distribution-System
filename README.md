@@ -27,13 +27,13 @@ The traditional Public Distribution System often suffers from lack of transparen
 > [!TIP]
 > To display screenshots on your GitHub repository, create a `screenshots` folder in the root directory, save your screenshots as PNG files, and commit them.
 
-| Landing Page | Login Interface |
+| Admin Dashboard | Dealer Panel |
 | :---: | :---: |
-| ![Landing Page Preview](screenshots/landing.png) | ![Login Preview](screenshots/login.png) |
+| ![Admin Dashboard](screenshots/admin%20dashboard.png) | ![Dealer Panel](screenshots/dealer.png) |
 
-| Admin Dashboard | Transparency Ledger |
+| Beneficiary (User) Panel | Transparency Portal |
 | :---: | :---: |
-| ![Admin Dashboard Preview](screenshots/admin_dashboard.png) | ![Transparency Portal Preview](screenshots/transparency.png) |
+| ![Beneficiary Panel](screenshots/User.png) | ![Transparency Portal](screenshots/Transparency.png) |
 
 ---
 

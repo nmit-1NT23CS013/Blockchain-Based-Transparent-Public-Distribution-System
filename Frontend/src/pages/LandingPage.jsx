@@ -1,5 +1,6 @@
-import React from "react";
+import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import API from "../services/api";
 
 /**
  * PDS TrustLink Landing Page component.
@@ -7,6 +8,39 @@ import { useNavigate } from "react-router-dom";
  */
 const LandingPage = () => {
   const navigate = useNavigate();
+  const [resetLoading, setResetLoading] = useState(false);
+  const [resetMessage, setResetMessage] = useState("");
+  const [resetError, setResetError] = useState("");
+
+  const handleResetDemo = async () => {
+    const confirmReset = window.confirm(
+      "Are you sure you want to reset all demo data? " +
+      "This will clear all Dealers, Beneficiaries, and off-chain stock, and seed the default Admin."
+    );
+
+    if (!confirmReset) return;
+
+    setResetLoading(true);
+    setResetMessage("");
+    setResetError("");
+
+    try {
+      const response = await API.post("/api/auth/reset-demo");
+      if (response.data.success) {
+        setResetMessage("Demo environment initialized successfully.");
+      } else {
+        setResetError(response.data.message || "Failed to initialize demo data.");
+      }
+    } catch (err) {
+      console.error("[DEMO RESET ERROR]", err);
+      setResetError(
+        err.response?.data?.message || 
+        "Failed to reset demo data. Please verify backend connection and smart contract deployment status."
+      );
+    } finally {
+      setResetLoading(false);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-[#f8fafc] text-[#191c1e] font-sans selection:bg-[#1e3a5f]/10">
@@ -76,7 +110,29 @@ const LandingPage = () => {
               >
                 View Live Blockchain Records
               </button>
+              <button
+                onClick={handleResetDemo}
+                disabled={resetLoading}
+                className="bg-amber-600 hover:bg-amber-700 text-white px-8 py-3 rounded font-bold text-sm transition-all shadow-lg transform hover:-translate-y-0.5 disabled:opacity-75 disabled:cursor-not-allowed flex items-center gap-2"
+              >
+                {resetLoading ? "Resetting..." : "Reset Demo Data"}
+              </button>
             </div>
+
+            {(resetError || resetMessage) && (
+              <div className="pt-4 max-w-xl">
+                {resetError && (
+                  <div className="p-3 bg-red-500/20 border border-red-500/30 text-red-200 rounded text-xs">
+                    {resetError}
+                  </div>
+                )}
+                {resetMessage && (
+                  <div className="p-3 bg-emerald-500/20 border border-emerald-500/30 text-[#6ee7b7] rounded text-xs font-semibold">
+                    {resetMessage}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="hidden md:block">
